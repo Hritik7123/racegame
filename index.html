@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>3D City Driving Game</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #222; }
+    #ui {
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      color: #fff; font-family: Arial, sans-serif; font-size: 1.3em;
+      background: rgba(0,0,0,0.5); padding: 10px 30px; border-radius: 10px; z-index: 10;
+      pointer-events: none;
+    }
+    #ui span { margin: 0 20px; }
+
+    #controls-left {
+      position: absolute;
+      left: 20px;
+      bottom: 40px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    #controls-right {
+      position: absolute;
+      right: 20px;
+      bottom: 40px;
+      z-index: 20;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    #controls-left button, #controls-right button {
+      width: 48px;
+      height: 48px;
+      font-size: 2em;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      margin: 2px;
+      outline: none;
+      box-shadow: 0 2px 8px #0006;
+      transition: background 0.2s;
+    }
+    #controls-left button:active, #controls-right button:active {
+      background: #00bfff;
+      color: #222;
+    }
+    @media (min-width: 700px) {
+      #controls-left { left: 40px; bottom: 60px; }
+      #controls-right { right: 40px; bottom: 60px; }
+      #controls-left button, #controls-right button { width: 56px; height: 56px; font-size: 2.2em; }
+    }
+
+    /* Loading overlay styles */
+    #loading-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #111d 90%;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      transition: opacity 0.5s;
+    }
+    #loading-content {
+      text-align: center;
+      color: #fff;
+    }
+    #loading-content h1 {
+      font-size: 2.5em;
+      letter-spacing: 2px;
+      margin-bottom: 24px;
+      color: #00bfff;
+      text-shadow: 0 2px 12px #000a;
+    }
+    #loading-spinner {
+      width: 48px; height: 48px;
+      border: 6px solid #00bfff;
+      border-top: 6px solid #fff;
+      border-radius: 50%;
+      margin: 0 auto 18px auto;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading overlay -->
+  <div id="loading-overlay">
+    <div id="loading-content">
+      <h1>HRITHIK'S GAME</h1>
+      <div id="loading-spinner"></div>
+      <p>Loading...</p>
+    </div>
+  </div>
+
+  <div id="ui">
+    <span id="speed">Speed: 0</span>
+    <span id="nitro">Nitro: 100%</span>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script>
+    // Ensure GLTFLoader is available globally regardless of CDN quirks
+    window.GLTFLoader = window.GLTFLoader || (window.THREE && THREE.GLTFLoader);
+    var GLTFLoader = window.GLTFLoader;
+  </script>
+  <!-- <script src="https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.umd.js"></script> -->
+
+  <script>
+    // --- Scene Setup ---
+    let scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x99ccff);
+
+    let camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
+    let renderer = new THREE.WebGLRenderer({antialias: true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // --- Lighting ---
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    let dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(100, 200, 100);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // --- Physics World REMOVED FOR DEBUG ---
+    // const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+
+    // --- Loaders ---
+  const gltfLoader = new GLTFLoader();
+
+    // --- Large City Grid ---
+    const citySize = 40;
+    const blockSize = 30;
+    const roadWidth = 16;
+    const buildingHeightMin = 12, buildingHeightMax = 60;
+    let buildings = [];
+
+    // --- Ground (Grass) ---
+    let groundGeo = new THREE.PlaneGeometry(citySize*blockSize*1.5, citySize*blockSize*1.5);
+    let groundMat = new THREE.MeshStandardMaterial({color: 0x3a7d2c});
+    let ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI/2;
+    ground.position.y = -0.1;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // --- River ---
+    let riverGeo = new THREE.BoxGeometry(citySize*blockSize*1.5, 0.2, 18);
+    let riverMat = new THREE.MeshPhysicalMaterial({color: 0x3399ff, transparent: true, opacity: 0.7, roughness: 0.2, metalness: 0.5, reflectivity: 0.8});
+    let river = new THREE.Mesh(riverGeo, riverMat);
+    river.position.set(0, 0.01, citySize*blockSize*0.7);
+    scene.add(river);
+
+    // --- Roads and Buildings ---
+    for (let i = 0; i < citySize; i++) {
+      // Horizontal roads
+      let roadGeo = new THREE.BoxGeometry(citySize*blockSize, 0.1, roadWidth);
+      let roadMat = new THREE.MeshStandardMaterial({color: 0x444444});
+      let road = new THREE.Mesh(roadGeo, roadMat);
+      road.position.set(0, 0, (i - Math.floor(citySize/2)) * blockSize);
+      road.receiveShadow = true;
+      scene.add(road);
+
+      // Vertical roads
+      let roadGeo2 = new THREE.BoxGeometry(roadWidth, 0.1, citySize*blockSize);
+      let road2 = new THREE.Mesh(roadGeo2, roadMat);
+      road2.position.set((i - Math.floor(citySize/2)) * blockSize, 0, 0);
+      road2.receiveShadow = true;
+      scene.add(road2);
+
+      // Buildings
+      for (let j = 0; j < citySize; j++) {
+        if (i === Math.floor(citySize/2) || j === Math.floor(citySize/2)) continue;
+        let h = buildingHeightMin + Math.random()*(buildingHeightMax-buildingHeightMin);
+        let geo = new THREE.BoxGeometry(16, h, 16);
+        let mat = new THREE.MeshStandardMaterial({color: 0x8888aa + Math.floor(Math.random()*0x222222), metalness: 0.3, roughness: 0.6});
+        let mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(
+          (i - Math.floor(citySize/2)) * blockSize,
+          h/2,
+          (j - Math.floor(citySize/2)) * blockSize
+        );
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        buildings.push(mesh);
+      }
+    }
+
+    // --- Boats in River ---
+    function spawnBoat(x, z) {
+      gltfLoader.load('assets/boat.glb', gltf => {
+        let boat = gltf.scene;
+        boat.position.set(x, 0.2, z);
+        boat.scale.set(3, 3, 3);
+        scene.add(boat);
+        // Animate boat
+        let speed = 0.2 + Math.random()*0.3;
+        function moveBoat() {
+          boat.position.x += speed;
+          if (boat.position.x > citySize*blockSize*0.7) boat.position.x = -citySize*blockSize*0.7;
+          requestAnimationFrame(moveBoat);
+        }
+        moveBoat();
+      }, undefined, function() {
+        // On error, show placeholder boat
+        let boat = new THREE.Group();
+        let hull = new THREE.BoxGeometry(2, 0.4, 1);
+        let hullMat = new THREE.MeshPhongMaterial({color: 0x884400});
+        let hullMesh = new THREE.Mesh(hull, hullMat);
+        hullMesh.position.y = 0.2;
+        boat.add(hullMesh);
+        let deck = new THREE.BoxGeometry(1.2, 0.2, 0.7);
+        let deckMat = new THREE.MeshPhongMaterial({color: 0xcccccc});
+        let deckMesh = new THREE.Mesh(deck, deckMat);
+        deckMesh.position.y = 0.45;
+        boat.add(deckMesh);
+        boat.position.set(x, 0.2, z);
+        scene.add(boat);
+        let speed = 0.2 + Math.random()*0.3;
+        function moveBoat() {
+          boat.position.x += speed;
+          if (boat.position.x > citySize*blockSize*0.7) boat.position.x = -citySize*blockSize*0.7;
+          requestAnimationFrame(moveBoat);
+        }
+        moveBoat();
+      });
+    }
+    for (let i = 0; i < 8; i++) {
+      spawnBoat(-citySize*blockSize*0.7 + i*citySize*blockSize*0.18, citySize*blockSize*0.7 + (Math.random()-0.5)*6);
+    }
+
+    // --- People in City ---
+    function spawnPerson(x, z) {
+      gltfLoader.load('assets/person.glb', gltf => {
+        let person = gltf.scene;
+        person.position.set(x, 0, z);
+        person.scale.set(2, 2, 2);
+        scene.add(person);
+        // Animate walking
+        let dir = Math.random() > 0.5 ? 1 : -1;
+        function walk() {
+          person.position.x += dir * 0.1;
+          if (Math.abs(person.position.x) > citySize*blockSize*0.7) dir *= -1;
+          requestAnimationFrame(walk);
+        }
+        walk();
+      }, undefined, function() {
+        // On error, show placeholder person
+        let group = new THREE.Group();
+        let bodyGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.5, 8);
+        let bodyMat = new THREE.MeshPhongMaterial({color: 0xffe0bd});
+        let body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.25;
+        group.add(body);
+        let headGeo = new THREE.SphereGeometry(0.16, 8, 8);
+        let headMat = new THREE.MeshPhongMaterial({color: 0xffdbac});
+        let head = new THREE.Mesh(headGeo, headMat);
+        head.position.y = 0.55;
+        group.add(head);
+        let shirtGeo = new THREE.CylinderGeometry(0.19, 0.19, 0.18, 8);
+        let shirtMat = new THREE.MeshPhongMaterial({color: 0x3366cc});
+        let shirt = new THREE.Mesh(shirtGeo, shirtMat);
+        shirt.position.y = 0.13;
+        group.add(shirt);
+        let legGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.22, 8);
+        let legMat = new THREE.MeshPhongMaterial({color: 0x222244});
+        let leg1 = new THREE.Mesh(legGeo, legMat);
+        leg1.position.set(-0.06, 0.01, 0);
+        group.add(leg1);
+        let leg2 = leg1.clone(); leg2.position.x = 0.06; group.add(leg2);
+        group.position.set(x, 0, z);
+        scene.add(group);
+        let dir = Math.random() > 0.5 ? 1 : -1;
+        function walk() {
+          group.position.x += dir * 0.1;
+          if (Math.abs(group.position.x) > citySize*blockSize*0.7) dir *= -1;
+          requestAnimationFrame(walk);
+        }
+        walk();
+      });
+    }
+    for (let i = 0; i < 60; i++) {
+      let x = (Math.random()-0.5)*citySize*blockSize*1.2;
+      let z = (Math.random()-0.5)*citySize*blockSize*1.2;
+      spawnPerson(x, z);
+    }
+
+    // --- Player Car (GLTF Model or Placeholder) ---
+    let car, carBody;
+    function addPlaceholderCar() {
+      car = new THREE.Group();
+      // Body (sportier, lower, longer)
+      let carBodyGeo = new THREE.BoxGeometry(2.4, 0.65, 4.6);
+      let carBodyMat = new THREE.MeshPhysicalMaterial({color: 0x222a36, metalness: 0.8, roughness: 0.22, clearcoat: 0.7, clearcoatRoughness: 0.08});
+      let carBodyMesh = new THREE.Mesh(carBodyGeo, carBodyMat);
+      carBodyMesh.position.y = 0.5;
+      carBodyMesh.castShadow = true;
+      carBodyMesh.receiveShadow = true;
+      car.add(carBodyMesh);
+      // Roof
+      let carRoofGeo = new THREE.BoxGeometry(1.4, 0.38, 1.7);
+      let carRoofMat = new THREE.MeshPhysicalMaterial({color: 0x222a36, metalness: 0.7, roughness: 0.18, transparent: true, opacity: 0.82});
+      let carRoof = new THREE.Mesh(carRoofGeo, carRoofMat);
+      carRoof.position.set(0, 0.95, -0.5);
+      carRoof.castShadow = true;
+      car.add(carRoof);
+      // Hood
+      let hoodGeo = new THREE.BoxGeometry(1.7, 0.22, 1.2);
+      let hoodMat = new THREE.MeshPhysicalMaterial({color: 0x222a36, metalness: 0.8, roughness: 0.18});
+      let hood = new THREE.Mesh(hoodGeo, hoodMat);
+      hood.position.set(0, 0.8, 1.45);
+      hood.castShadow = true;
+      car.add(hood);
+      // Trunk
+      let trunkGeo = new THREE.BoxGeometry(1.3, 0.22, 0.9);
+      let trunkMat = new THREE.MeshPhysicalMaterial({color: 0x222a36, metalness: 0.7, roughness: 0.22});
+      let trunk = new THREE.Mesh(trunkGeo, trunkMat);
+      trunk.position.set(0, 0.8, -2.0);
+      trunk.castShadow = true;
+      car.add(trunk);
+      // Wheels (sportier, larger)
+      let wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.5, 20);
+      let wheelMat = new THREE.MeshPhysicalMaterial({color: 0x222222, metalness: 0.95, roughness: 0.4});
+      for (let dx of [-0.95, 0.95]) {
+        for (let dz of [1.7, -1.7]) {
+          let wheel = new THREE.Mesh(wheelGeo, wheelMat);
+          wheel.rotation.z = Math.PI/2;
+          wheel.position.set(dx, 0.22, dz);
+          wheel.castShadow = true;
+          car.add(wheel);
+        }
+      }
+      // Headlights (BMW style)
+      let headlightGeo = new THREE.CylinderGeometry(0.13, 0.13, 0.08, 16);
+      let headlightMat = new THREE.MeshPhysicalMaterial({color: 0xcce6ff, emissive: 0xcce6ff, emissiveIntensity: 1.2, metalness: 0.2, roughness: 0.18});
+      for (let dx of [-0.45, 0.45]) {
+        let light = new THREE.Mesh(headlightGeo, headlightMat);
+        light.position.set(dx, 0.62, 2.35);
+        light.rotation.x = Math.PI/2;
+        car.add(light);
+      }
+      // BMW kidney grille
+      let grilleMat = new THREE.MeshPhysicalMaterial({color: 0x222222, metalness: 0.9, roughness: 0.18});
+      for (let dx of [-0.22, 0.22]) {
+        let grille = new THREE.CylinderGeometry(0.09, 0.09, 0.18, 16);
+        let mesh = new THREE.Mesh(grille, grilleMat);
+        mesh.position.set(dx, 0.55, 2.35);
+        mesh.rotation.x = Math.PI/2;
+        car.add(mesh);
+      }
+      // Taillights (BMW style)
+      let taillightGeo = new THREE.BoxGeometry(0.18, 0.09, 0.08);
+      let taillightMat = new THREE.MeshPhysicalMaterial({color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 1.1, metalness: 0.2, roughness: 0.22});
+      for (let dx of [-0.38, 0.38]) {
+        let light = new THREE.Mesh(taillightGeo, taillightMat);
+        light.position.set(dx, 0.55, -2.35);
+        car.add(light);
+      }
+      // BMW logo (simple disc)
+      let logoGeo = new THREE.CircleGeometry(0.13, 20);
+      let logoMat = new THREE.MeshBasicMaterial({color: 0xffffff});
+      let logo = new THREE.Mesh(logoGeo, logoMat);
+      logo.position.set(0, 0.75, 2.36);
+      logo.rotation.x = -Math.PI/2;
+      car.add(logo);
+      car.position.set(0, 0.5, -blockSize*2);
+      car.scale.set(1.5, 1.5, 1.5);
+      car.castShadow = true;
+      car.receiveShadow = true;
+      scene.add(car);
+      carBody = car;
+    }
+    gltfLoader.load('assets/car.glb', gltf => {
+      car = gltf.scene;
+      car.position.set(0, 0.5, -blockSize*2);
+      car.scale.set(3, 3, 3);
+      scene.add(car);
+      carBody = car;
+    }, undefined, function() {
+      addPlaceholderCar();
+    });
+
+    // --- Car Physics State ---
+    let carState = {
+      pos: new THREE.Vector3(0, 0.5, -blockSize*2),
+      vel: new THREE.Vector3(0, 0, 0),
+      dir: 0,
+      speed: 0,
+      steer: 0,
+      nitro: 1,
+      onGround: true,
+      airborne: false
+    };
+
+    // --- UI Elements ---
+    const speedSpan = document.getElementById('speed');
+    const nitroSpan = document.getElementById('nitro');
+
+    // --- Controls ---
+    let keys = {};
+    window.addEventListener('keydown', e => { keys[e.code] = true; });
+    window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+    // --- Camera Views ---
+    function updateCamera() {
+      if (!carBody) return;
+      let camTarget = carState.pos.clone();
+      let camOffset = new THREE.Vector3(
+        Math.sin(carState.dir) * -12,
+        8,
+        Math.cos(carState.dir) * -22
+      );
+      camera.position.copy(camTarget.clone().add(camOffset));
+      camera.lookAt(camTarget.x, camTarget.y + 1, camTarget.z);
+    }
+
+    // --- Game Loop ---
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // --- Controls ---
+      let accel = 0, steer = 0;
+      let maxSpeed = 0.7, accelRate = 0.018, brakeRate = 0.035, friction = 0.008;
+      let nitroActive = keys['KeyF'] && carState.nitro > 0.05;
+      if (nitroActive) maxSpeed = 1.5;
+
+      if (keys['ArrowLeft'] || keys['KeyA']) steer = 0.035;
+      if (keys['ArrowRight'] || keys['KeyD']) steer = -0.035;
+      if (keys['ArrowUp'] || keys['KeyW']) accel = accelRate;
+      if (keys['ArrowDown'] || keys['KeyS']) accel = -brakeRate;
+      if (keys['Space']) {
+        carState.speed *= 0.90;
+        if (Math.abs(carState.speed) < 0.01) carState.speed = 0;
+      }
+
+      if (nitroActive) {
+        carState.nitro -= 0.005;
+        if (carState.nitro < 0) carState.nitro = 0;
+      } else {
+        carState.nitro += 0.001;
+        if (carState.nitro > 1) carState.nitro = 1;
+      }
+
+      if (Math.abs(carState.speed) > 0.01) carState.dir += steer * carState.speed / maxSpeed;
+      carState.speed += accel;
+      if (carState.speed > maxSpeed) carState.speed = maxSpeed;
+      if (carState.speed < -0.18) carState.speed = -0.18;
+      if (!keys['ArrowUp'] && !keys['KeyW'] && !keys['ArrowDown'] && !keys['KeyS']) {
+        carState.speed *= (1 - friction);
+        if (Math.abs(carState.speed) < 0.01) carState.speed = 0;
+      }
+
+      let moveVec = new THREE.Vector3(
+        Math.sin(carState.dir) * carState.speed,
+        0,
+        Math.cos(carState.dir) * carState.speed
+      );
+      carState.pos.add(moveVec);
+
+      // --- Update car mesh ---
+      if (carBody) {
+        carBody.position.copy(carState.pos);
+        carBody.rotation.y = carState.dir;
+      }
+
+      // --- UI ---
+      speedSpan.textContent = 'Speed: ' + Math.abs(carState.speed*100).toFixed(0);
+      nitroSpan.textContent = 'Nitro: ' + Math.round(carState.nitro*100) + '%';
+
+      // --- Camera ---
+      updateCamera();
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // --- Responsive ---
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+
+  <!-- On-screen controls for mobile/desktop -->
+  <div id="controls-left">
+    <button id="btn-up">▲</button><br>
+    <button id="btn-down">▼</button>
+  </div>
+  <div id="controls-right">
+    <button id="btn-left">◀</button>
+    <button id="btn-right">▶</button>
+  </div>
+
+  <style>
+    #controls-left {
+      position: absolute;
+      left: 20px;
+      bottom: 40px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    #controls-right {
+      position: absolute;
+      right: 20px;
+      bottom: 40px;
+      z-index: 20;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    #controls-left button, #controls-right button {
+      width: 48px;
+      height: 48px;
+      font-size: 2em;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      margin: 2px;
+      outline: none;
+      box-shadow: 0 2px 8px #0006;
+      transition: background 0.2s;
+    }
+    #controls-left button:active, #controls-right button:active {
+      background: #00bfff;
+      color: #222;
+    }
+    @media (min-width: 700px) {
+      #controls-left { left: 40px; bottom: 60px; }
+      #controls-right { right: 40px; bottom: 60px; }
+      #controls-left button, #controls-right button { width: 56px; height: 56px; font-size: 2.2em; }
+    }
+  </style>
+
+  <script>
+  // --- On-screen Controls Logic ---
+  function triggerKey(code, isDown) {
+    keys[code] = isDown;
+  }
+  function addBtnControl(btnId, code) {
+    const btn = document.getElementById(btnId);
+    btn.addEventListener('touchstart', e => { e.preventDefault(); triggerKey(code, true); });
+    btn.addEventListener('touchend', e => { e.preventDefault(); triggerKey(code, false); });
+    btn.addEventListener('mousedown', e => { e.preventDefault(); triggerKey(code, true); });
+    btn.addEventListener('mouseup', e => { e.preventDefault(); triggerKey(code, false); });
+    btn.addEventListener('mouseleave', e => { e.preventDefault(); triggerKey(code, false); });
+  }
+  addBtnControl('btn-up', 'ArrowUp');
+  addBtnControl('btn-down', 'ArrowDown');
+  addBtnControl('btn-left', 'ArrowLeft');
+  addBtnControl('btn-right', 'ArrowRight');
+  </script>
+
+  <!-- Hide loading overlay when game is ready -->
+  <script>
+  window.addEventListener('DOMContentLoaded', function() {
+    // Wait for Three.js and main script to finish setup
+    setTimeout(function() {
+      document.getElementById('loading-overlay').style.opacity = 0;
+      setTimeout(function() {
+        document.getElementById('loading-overlay').style.display = 'none';
+      }, 600);
+    }, 1200); // Simulate loading time
+  });
+  </script>
+
+</body>
+</html>
